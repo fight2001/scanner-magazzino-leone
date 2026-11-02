@@ -320,7 +320,7 @@ $('q').addEventListener('input',function(){
   var q=this.value.trim().toLowerCase();var box=$('results');box.innerHTML='';
   if(q.length<2)return;
   var words=q.split(/\s+/);
-  var hits=searchIdx.filter(function(x){return words.every(function(w){return x.key.indexOf(w)>=0})}).slice(0,8);
+  var hits=searchIdx.filter(function(x){return words.every(function(w){return x.key.indexOf(w)>=0})}).slice(0,15);
   hits.forEach(function(h){
     var b=document.createElement('button');b.type='button';
     var a=document.createElement('span');a.textContent=h.n;
@@ -427,7 +427,7 @@ document.addEventListener('visibilitychange',function(){if(document.hidden){if(c
 var ocrW=null,ocrRun=false,ocrCanvas=null,ocrCtx=null,ocrReady=false,ocrLoading=null,canonIdx=null,ocrLast={sku:'',n:0,tokens:{}};
 var COLORS={BLACK:'NERO',WHITE:'BIANCO',RED:'ROSSO',BLUE:'BLU',GREEN:'VERDE',GREY:'GRIGIO',GRAY:'GRIGIO',PINK:'ROSA',YELLOW:'GIALLO',ORANGE:'ARANCIONE',BROWN:'MARRONE',NAVY:'BLU',PURPLE:'VIOLA',GOLD:'ORO',SILVER:'ARGENTO',CAMO:'CAMOUFLAGE'};
 function canon(s){return alnumOf(s).replace(/O/g,'0').replace(/[IL]/g,'1').replace(/S/g,'5').replace(/B/g,'8').replace(/Z/g,'2')}
-function buildCanon(){canonIdx={};Object.keys(catalog).forEach(function(k){var c=canon(k);canonIdx[c]=(c in canonIdx)?null:k})}
+function buildCanon(){canonIdx={};Object.keys(catalog).forEach(function(k){if(/^MB-/.test(k))return;var c=canon(k);canonIdx[c]=(c in canonIdx)?null:k})}
 function ocrMatch(words){
   var best=null;
   words.forEach(function(w){
