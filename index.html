@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#14151a">
+<title>Scanner Magazzino LEONE</title>
+<style>
+:root{
+  --bg:#14151a; --panel:#1d1f26; --line:#2d303a; --fg:#eceef2; --muted:#9aa0ae;
+  --accent:#e0a93b; --accent-fg:#1a1405; --ok:#4cc38a; --warn:#e5a23a; --bad:#ef6a5e;
+  --font:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:16px/1.35 var(--font);
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  padding-block:max(12px,env(safe-area-inset-top,0px)) max(12px,env(safe-area-inset-bottom,0px));
+  display:flex;flex-direction:column;gap:12px;overflow-x:hidden}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+h1{font-size:17px;margin:0;letter-spacing:.02em}
+h1 small{display:block;font-size:12px;font-weight:400;color:var(--muted);letter-spacing:0}
+.status{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px;white-space:nowrap}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--muted)}
+.dot.ok{background:var(--ok)}.dot.wait{background:var(--warn)}.dot.bad{background:var(--bad)}
+button{font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;cursor:pointer;touch-action:manipulation}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent);font-weight:700}
+.cam{position:relative;border-radius:14px;overflow:hidden;background:#000;aspect-ratio:4/3;max-height:42vh;width:100%}
+.cam video{width:100%;height:100%;object-fit:cover;display:block}
+.cam .frame{position:absolute;inset:22% 8%;border:2px solid var(--accent);border-radius:10px;box-shadow:0 0 0 999px rgba(0,0,0,.35);pointer-events:none}
+.cam .msg{position:absolute;left:0;right:0;bottom:0;padding:8px 12px;font-size:13px;background:rgba(0,0,0,.6);text-align:center}
+.row{display:flex;gap:8px}
+.row input{flex:1;min-width:0}
+input[type=text],input[type=search],input[type=url]{font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;width:100%}
+.results{display:flex;flex-direction:column;gap:6px}
+.results button{text-align:left;display:flex;justify-content:space-between;gap:8px}
+.results .sku{color:var(--accent);font-variant-numeric:tabular-nums;font-weight:700}
+.sheet{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:10px;flex:1;min-height:0}
+.sheet[hidden]{display:none}
+.sheet h2{margin:0;font-size:17px}
+.sheet .code{color:var(--accent);font-weight:700;font-variant-numeric:tabular-nums;font-size:13px}
+.variants{display:flex;flex-direction:column;gap:6px;overflow-y:auto;min-height:0}
+.var{display:grid;grid-template-columns:1fr auto auto auto;align-items:center;gap:8px;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:6px 8px 6px 12px}
+.var .lab{min-width:0;overflow-wrap:anywhere}
+.var .n{font-variant-numeric:tabular-nums;font-weight:700;min-width:2.2ch;text-align:center;font-size:18px}
+.var button{width:46px;height:42px;padding:0;font-size:22px;line-height:1}
+.var button.plus{background:var(--accent);color:var(--accent-fg);border-color:var(--accent);font-weight:700}
+.hint{color:var(--muted);font-size:13px}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:max(18px,env(safe-area-inset-bottom,0px));background:#000;color:#fff;border:1px solid var(--line);padding:10px 14px;border-radius:10px;font-size:14px;max-width:90vw;z-index:5}
+dialog{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:14px;width:min(520px,92vw);padding:16px}
+dialog::backdrop{background:rgba(0,0,0,.6)}
+dialog h2{margin:0 0 8px;font-size:17px}
+dialog .row{margin-top:10px;justify-content:flex-end}
+footer{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+footer button{padding:6px 10px;font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Magazzino LEONE<small id="catinfo">caricamento catalogo…</small></h1>
+  <div class="status"><span class="dot wait" id="dot"></span><span id="stat">…</span></div>
+</header>
+
+<div class="cam" id="cam">
+  <video id="video" playsinline muted></video>
+  <div class="frame"></div>
+  <div class="msg" id="camMsg">Avvio fotocamera…</div>
+</div>
+
+<div class="row">
+  <input id="q" type="search" placeholder="Cerca codice o nome (es. GN010)" autocomplete="off" enterkeyhint="search">
+  <button id="camBtn" type="button">Fotocamera</button>
+</div>
+<div class="results" id="results"></div>
+
+<section class="sheet" id="sheet" hidden>
+  <div>
+    <div class="code" id="shCode"></div>
+    <h2 id="shName"></h2>
+  </div>
+  <div class="variants" id="variants"></div>
+  <button class="primary" id="closeSheet" type="button">Scansiona altro</button>
+</section>
+
+<footer>
+  <span id="tot">0 pezzi contati su questo telefono</span>
+  <span><button id="cfgBtn" type="button">Collegamento</button></span>
+</footer>
+
+<dialog id="cfg">
+  <h2>Collegamento al Google Sheet</h2>
+  <p class="hint">Incolla l'indirizzo dell'app web dello script (termina con /exec).</p>
+  <input id="cfgUrl" type="url" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off">
+  <p class="hint" id="cfgMsg"></p>
+  <div class="row">
+    <button id="cfgTest" type="button">Prova</button>
+    <button id="cfgSave" class="primary" type="button">Salva</button>
+    <button id="cfgClose" type="button">Chiudi</button>
+  </div>
+</dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script>
+(function(){
+'use strict';
+var $=function(id){return document.getElementById(id)};
+var LS={
+  get:function(k,d){try{var v=localStorage.getItem(k);return v===null?d:JSON.parse(v)}catch(e){return d}},
+  set:function(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
+};
+
+var catalog={};            // codice -> [{n:nome, v:[varianti]}]
+var searchIdx=[];          // [{sku,n,key}]
+var endpoint=LS.get('endpoint','');
+var queue=LS.get('queue',[]);
+var counts=LS.get('counts',{});   // "SKU|variante" -> pezzi contati da questo telefono
+var current=null;          // codice aperto nel pannello
+var flushing=false, flushTimer=null;
+var lastSeen={code:'',t:0};
+
+/* ---------- configurazione da link (#u=...) ---------- */
+(function(){
+  var m=/[#&]u=([^&]+)/.exec(location.hash||'');
+  if(m){
+    try{var u=decodeURIComponent(m[1]);if(/^https:\/\/script\.google\.com\//.test(u)){endpoint=u;LS.set('endpoint',u)}}catch(e){}
+    try{history.replaceState(null,'',location.pathname+location.search)}catch(e){}
+  }
+})();
+
+function toast(t,ms){
+  var el=document.createElement('div');el.className='toast';el.textContent=t;document.body.appendChild(el);
+  setTimeout(function(){el.remove()},ms||1800);
+}
+function vlabel(v){return v===''?'Unica':v}
+function norm(s){return String(s||'').toUpperCase().replace(/\s+/g,'')}
+
+/* ---------- catalogo ---------- */
+function loadCatalog(){
+  return fetch('catalog.json',{cache:'no-cache'}).then(function(r){return r.json()}).then(function(j){
+    catalog=j.items||j;
+    searchIdx=[];var nv=0;
+    Object.keys(catalog).forEach(function(sku){
+      catalog[sku].forEach(function(p){nv+=p.v.length;searchIdx.push({sku:sku,n:p.n,key:(sku+' '+p.n).toLowerCase()})});
+    });
+    $('catinfo').textContent=Object.keys(catalog).length+' articoli · '+nv+' varianti'+(j.updated?' · '+j.updated:'');
+  }).catch(function(){$('catinfo').textContent='catalogo non disponibile'});
+}
+function alnumOf(s){return String(s).toUpperCase().replace(/[^A-Z0-9]/g,'')}
+function resolveSku(raw){
+  var c=norm(raw);if(!c)return null;
+  if(catalog[c])return c;
+  var base=c.split('/')[0];
+  if(catalog[base])return base;
+  var a=alnumOf(base),best=null,bestLen=0;
+  Object.keys(catalog).forEach(function(s){
+    var sa=alnumOf(s);
+    if(sa===a){best=s;bestLen=9999}
+    else if(bestLen<9999&&a.indexOf(sa)===0&&sa.length>bestLen){best=s;bestLen=sa.length}
+  });
+  return best;
+}
+
+/* ---------- pannello varianti ---------- */
+function openSheet(sku){
+  current=sku;
+  var prods=catalog[sku];
+  $('shCode').textContent=sku;
+  $('shName').textContent=prods.map(function(p){return p.n}).join(' / ');
+  var box=$('variants');box.innerHTML='';
+  prods.forEach(function(p){
+    if(prods.length>1){var h=document.createElement('div');h.className='hint';h.textContent=p.n;box.appendChild(h)}
+    p.v.forEach(function(v){
+      var key=sku+'|'+p.n+'|'+v;
+      var row=document.createElement('div');row.className='var';
+      var lab=document.createElement('div');lab.className='lab';lab.textContent=vlabel(v);
+      var minus=document.createElement('button');minus.type='button';minus.textContent='−';minus.setAttribute('aria-label','Togli uno '+vlabel(v));
+      var n=document.createElement('div');n.className='n';n.textContent=counts[key]||0;
+      var plus=document.createElement('button');plus.type='button';plus.className='plus';plus.textContent='+';plus.setAttribute('aria-label','Aggiungi uno '+vlabel(v));
+      minus.onclick=function(){change(sku,p.n,v,-1,n,key)};
+      plus.onclick=function(){change(sku,p.n,v,1,n,key)};
+      row.appendChild(lab);row.appendChild(minus);row.appendChild(n);row.appendChild(plus);
+      box.appendChild(row);
+    });
+  });
+  $('sheet').hidden=false;
+  $('results').innerHTML='';
+  if(navigator.vibrate)try{navigator.vibrate(40)}catch(e){}
+}
+function closeSheet(){current=null;$('sheet').hidden=true;lastSeen={code:'',t:Date.now()}}
+$('closeSheet').onclick=closeSheet;
+
+function change(sku,name,variant,delta,nEl,key){
+  var cur=counts[key]||0;
+  if(delta<0&&cur<=0){toast('Niente da togliere su questo telefono');return}
+  counts[key]=cur+delta;
+  nEl.textContent=counts[key];
+  LS.set('counts',counts);
+  queue.push({id:Date.now().toString(36)+Math.random().toString(36).slice(2,8),sku:sku,name:name,variant:vlabel(variant),delta:delta,t:new Date().toISOString()});
+  LS.set('queue',queue);
+  updateTotals();flush();
+}
+function updateTotals(){
+  var t=0;Object.keys(counts).forEach(function(k){t+=counts[k]});
+  $('tot').textContent=t+' pezzi contati su questo telefono';
+  paintStatus();
+}
+
+/* ---------- sincronizzazione con Google Sheets ---------- */
+function paintStatus(state){
+  var dot=$('dot'),st=$('stat');
+  if(!endpoint){dot.className='dot bad';st.textContent='Foglio non collegato';return}
+  if(state==='err'){dot.className='dot bad';st.textContent=queue.length+' in attesa (offline?)';return}
+  if(queue.length){dot.className='dot wait';st.textContent=queue.length+' da inviare…';return}
+  dot.className='dot ok';st.textContent='Sincronizzato';
+}
+function flush(){
+  if(!endpoint){paintStatus();return}
+  if(flushing||!queue.length){paintStatus();return}
+  flushing=true;
+  var batch=queue.slice(0,40);
+  fetch(endpoint,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({events:batch}),redirect:'follow'})
+  .then(function(r){return r.json()})
+  .then(function(j){
+    if(!j||!j.ok)throw new Error((j&&j.error)||'risposta non valida');
+    var sent={};batch.forEach(function(e){sent[e.id]=1});
+    queue=queue.filter(function(e){return !sent[e.id]});
+    LS.set('queue',queue);flushing=false;paintStatus();
+    if(queue.length)flush();
+  }).catch(function(){
+    flushing=false;paintStatus('err');
+    clearTimeout(flushTimer);flushTimer=setTimeout(flush,6000);
+  });
+}
+window.addEventListener('online',flush);
+
+/* ---------- ricerca manuale ---------- */
+$('q').addEventListener('input',function(){
+  var q=this.value.trim().toLowerCase();var box=$('results');box.innerHTML='';
+  if(q.length<2)return;
+  var words=q.split(/\s+/);
+  var hits=searchIdx.filter(function(x){return words.every(function(w){return x.key.indexOf(w)>=0})}).slice(0,8);
+  hits.forEach(function(h){
+    var b=document.createElement('button');b.type='button';
+    var a=document.createElement('span');a.textContent=h.n;
+    var s=document.createElement('span');s.className='sku';s.textContent=h.sku;
+    b.appendChild(a);b.appendChild(s);
+    b.onclick=function(){$('q').value='';openSheet(h.sku)};
+    box.appendChild(b);
+  });
+  if(!hits.length){var d=document.createElement('div');d.className='hint';d.textContent='Nessun articolo trovato';box.appendChild(d)}
+});
+$('q').addEventListener('keydown',function(e){
+  if(e.key==='Enter'){var s=resolveSku(this.value);if(s){this.value='';openSheet(s)}}
+});
+
+/* ---------- fotocamera ---------- */
+var stream=null,controls=null,detector=null,timer=null,camOn=false;
+function onCode(raw){
+  if(current)return;
+  var now=Date.now();
+  if(raw===lastSeen.code&&now-lastSeen.t<2500)return;
+  lastSeen={code:raw,t:now};
+  var sku=resolveSku(raw);
+  if(sku){openSheet(sku)}else{toast('Codice non in catalogo: '+raw,2200)}
+}
+function setMsg(t){$('camMsg').textContent=t}
+function stopCamera(){
+  camOn=false;
+  if(timer){clearInterval(timer);timer=null}
+  if(controls){try{controls.stop()}catch(e){}controls=null}
+  if(stream){stream.getTracks().forEach(function(t){t.stop()});stream=null}
+  $('video').srcObject=null;
+}
+function startCamera(){
+  stopCamera();
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){setMsg('Fotocamera non disponibile: usa la ricerca');return}
+  camOn=true;setMsg('Avvio fotocamera…');
+  var video=$('video');
+  if('BarcodeDetector' in window){
+    navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280}},audio:false}).then(function(s){
+      stream=s;video.srcObject=s;return video.play();
+    }).then(function(){
+      try{detector=new BarcodeDetector({formats:['code_128','ean_13','ean_8','code_39','upc_a','qr_code']})}catch(e){detector=new BarcodeDetector()}
+      setMsg('Inquadra il codice a barre');
+      timer=setInterval(function(){
+        if(current||video.readyState<2)return;
+        detector.detect(video).then(function(r){if(r&&r.length)onCode(r[0].rawValue)}).catch(function(){});
+      },250);
+    }).catch(camError);
+  }else if(window.ZXing){
+    var Z=ZXing,hints=new Map();
+    hints.set(Z.DecodeHintType.POSSIBLE_FORMATS,[Z.BarcodeFormat.CODE_128,Z.BarcodeFormat.EAN_13,Z.BarcodeFormat.EAN_8,Z.BarcodeFormat.CODE_39,Z.BarcodeFormat.UPC_A,Z.BarcodeFormat.QR_CODE]);
+    hints.set(Z.DecodeHintType.TRY_HARDER,true);
+    var reader=new Z.BrowserMultiFormatReader(hints);
+    reader.decodeFromConstraints({video:{facingMode:{ideal:'environment'},width:{ideal:1280}},audio:false},video,function(res){
+      if(res)onCode(res.getText());
+    }).then(function(c){controls=c;setMsg('Inquadra il codice a barre')}).catch(camError);
+  }else{setMsg('Lettore non caricato: usa la ricerca manuale')}
+}
+function camError(e){
+  camOn=false;
+  var n=e&&e.name;
+  setMsg(n==='NotAllowedError'?'Permesso fotocamera negato: abilitalo nelle impostazioni del browser':'Fotocamera non disponibile: usa la ricerca');
+}
+$('camBtn').onclick=function(){if(camOn){stopCamera();setMsg('Fotocamera spenta');this.textContent='Fotocamera'}else{startCamera();this.textContent='Spegni'}};
+$('camBtn').textContent='Spegni';
+document.addEventListener('visibilitychange',function(){if(document.hidden){if(camOn){stopCamera();$('camBtn').textContent='Fotocamera';setMsg('Fotocamera in pausa')}}});
+
+/* ---------- impostazioni ---------- */
+var dlg=$('cfg');
+$('cfgBtn').onclick=function(){$('cfgUrl').value=endpoint;$('cfgMsg').textContent='';if(dlg.showModal)dlg.showModal();else dlg.setAttribute('open','')};
+$('cfgClose').onclick=function(){dlg.close?dlg.close():dlg.removeAttribute('open')};
+$('cfgSave').onclick=function(){
+  var u=$('cfgUrl').value.trim();
+  if(!/^https:\/\/script\.google\.com\/.+\/exec/.test(u)){$('cfgMsg').textContent='Indirizzo non valido: deve iniziare con https://script.google.com e finire con /exec';return}
+  endpoint=u;LS.set('endpoint',u);$('cfgMsg').textContent='Salvato';paintStatus();flush();
+};
+$('cfgTest').onclick=function(){
+  var u=$('cfgUrl').value.trim();$('cfgMsg').textContent='Prova in corso…';
+  fetch(u,{redirect:'follow'}).then(function(r){return r.json()}).then(function(j){
+    $('cfgMsg').textContent=j&&j.ok?'Collegato: '+j.rows+' righe nel foglio':'Risposta non valida';
+  }).catch(function(){$('cfgMsg').textContent='Non raggiungibile: controlla l\'indirizzo e che l\'accesso sia "Chiunque"'});
+};
+
+/* ---------- avvio ---------- */
+updateTotals();
+loadCatalog().then(function(){startCamera();flush()});
+window.__leone={resolveSku:resolveSku,catalog:function(){return catalog},onCode:onCode,queue:function(){return queue}};
+})();
+</script>
+</body>
+</html>
