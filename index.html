@@ -56,6 +56,11 @@ dialog h2{margin:0 0 8px;font-size:17px}
 dialog .row{margin-top:10px;justify-content:flex-end}
 footer{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
 footer button{padding:6px 10px;font-size:13px}
+[hidden]{display:none!important}
+.cesta{display:flex;gap:8px;align-items:center;margin:0 0 10px}
+.cesta input{flex:1;min-width:0}
+.badge{flex:1;background:#20301f;border:1px solid #3f7f3b;color:#bff0b8;border-radius:10px;padding:10px 12px;font-weight:600}
+.badge small{font-weight:400;opacity:.85;margin-left:6px}
 </style>
 </head>
 <body>
@@ -63,6 +68,17 @@ footer button{padding:6px 10px;font-size:13px}
   <h1>Magazzino LEONE<small id="catinfo">caricamento catalogo…</small></h1>
   <div class="status"><span class="dot wait" id="dot"></span><span id="stat">…</span></div>
 </header>
+
+<div class="cesta" id="cestaBar">
+  <div id="cestaNew" class="cesta" style="margin:0;flex:1">
+    <input id="cestaN" type="text" placeholder="Numero cesta (es. 3)" autocomplete="off" autocapitalize="characters" enterkeyhint="go">
+    <button id="cestaStart" class="primary" type="button">Inizia cesta</button>
+  </div>
+  <div id="cestaOn" class="cesta" style="margin:0;flex:1" hidden>
+    <div class="badge" id="cestaBadge"></div>
+    <button id="cestaEnd" type="button">Chiudi cesta</button>
+  </div>
+</div>
 
 <div class="cam" id="cam">
   <video id="video" playsinline muted></video>
@@ -92,6 +108,15 @@ footer button{padding:6px 10px;font-size:13px}
   <span><button id="cfgBtn" type="button">Collegamento</button></span>
 </footer>
 
+<dialog id="endDlg">
+  <h2 id="endTitle"></h2>
+  <p class="hint" id="endMsg"></p>
+  <div class="row">
+    <button id="endNo" type="button">Continua</button>
+    <button id="endYes" class="primary" type="button">Chiudi cesta</button>
+  </div>
+</dialog>
+
 <dialog id="cfg">
   <h2>Collegamento al Google Sheet</h2>
   <p class="hint">Incolla l'indirizzo dell'app web dello script (termina con /exec).</p>
@@ -118,6 +143,7 @@ var catalog={};            // codice -> [{n:nome, v:[varianti]}]
 var searchIdx=[];          // [{sku,n,key}]
 var endpoint=LS.get('endpoint','');
 var queue=LS.get('queue',[]);
+var cesta=LS.get('cesta',null);   // {n:'CESTA 3',t}
 var counts=LS.get('counts',{});   // "SKU|variante" -> pezzi contati da questo telefono
 var current=null;          // codice aperto nel pannello
 var flushing=false, flushTimer=null;
@@ -178,6 +204,7 @@ function vfind(m){
 }
 function openSheet(sku,opts){
   opts=opts||{};
+  if(!cesta&&!opts.assoc){toast('Prima avvia una cesta',2500);return}
   current=sku;
   var prods=catalog[sku];
   $('shCode').textContent=sku+(opts.assoc?' · associa il codice '+opts.assoc:(opts.hint?' · letto dall\'etichetta':''));
@@ -190,7 +217,7 @@ function openSheet(sku,opts){
     var vs=p.v;if(opts.hint){vs=p.v.map(function(v,i){return{v:v,i:i,s:vscore(v,opts.hint)}}).sort(function(a,b){return b.s-a.s||a.i-b.i}).map(function(o){return o.v})}
     vs.forEach(function(v){
       if(opts.only&&opts.only.v!==v)return;
-      var key=sku+'|'+p.n+'|'+v;
+      var key=(cesta?cesta.n:'-')+'|'+sku+'|'+p.n+'|'+v;
       var row=document.createElement('div');row.className='var';
       var lab=document.createElement('div');lab.className='lab';lab.textContent=vlabel(v);
       if(opts.hint&&vscore(v,opts.hint)>0)row.className+=' hit';
@@ -235,16 +262,18 @@ $('closeSheet').onclick=closeSheet;
 function change(sku,name,variant,delta,nEl,key){
   var cur=counts[key]||0;
   if(delta<0&&cur<=0){toast('Niente da togliere su questo telefono');return}
+  if(!cesta){toast('Prima avvia una cesta',2500);return}
   counts[key]=cur+delta;
   nEl.textContent=counts[key];
   LS.set('counts',counts);
-  queue.push({id:Date.now().toString(36)+Math.random().toString(36).slice(2,8),sku:sku,name:name,variant:vlabel(variant),delta:delta,t:new Date().toISOString()});
+  queue.push({id:Date.now().toString(36)+Math.random().toString(36).slice(2,8),sku:sku,name:name,variant:vlabel(variant),delta:delta,cesta:cesta.n,t:new Date().toISOString()});
   LS.set('queue',queue);
   updateTotals();flush();
 }
 function updateTotals(){
-  var t=0;Object.keys(counts).forEach(function(k){t+=counts[k]});
-  $('tot').textContent=t+' pezzi contati su questo telefono';
+  var t=0;if(cesta)Object.keys(counts).forEach(function(k){if(k.indexOf(cesta.n+'|')===0)t+=counts[k]});
+  $('tot').textContent=cesta?(t+' pezzi in '+cesta.n):'Nessuna cesta aperta';
+  if(cesta)$('cestaBadge').innerHTML=cesta.n+'<small>'+t+' pezzi</small>';
   paintStatus();
 }
 
@@ -309,6 +338,7 @@ var stream=null,controls=null,detector=null,timer=null,camOn=false;
 function onCode(raw){
   raw=String(raw||'').trim();if(!raw)return;
   if(current)return;
+  if(!cesta){setMsg('Avvia una cesta per iniziare');return}
   setMsg('Letto: '+raw);
   var now=Date.now();
   if(raw===lastSeen.code&&now-lastSeen.t<2500)return;
@@ -373,6 +403,7 @@ function startCamera(){
     var tick=0;
     timer=setInterval(function(){
       if(current||video.readyState<2||!video.videoWidth)return;
+      if(!cesta){if(tick++%8===0)setMsg('Avvia una cesta per iniziare');return}
       tick++;
       if(tick%8===1)setMsg('Inquadra il codice a barre · '+video.videoWidth+'×'+video.videoHeight);
       if(native){detector.detect(video).then(function(r){if(r&&r.length)onCode(r[0].rawValue)}).catch(function(){})}
@@ -453,7 +484,7 @@ function ocrStart(video){
 }
 function ocrLoop(video){
   if(!ocrRun||!camOn)return;
-  if(current||video.readyState<2||!video.videoWidth){setTimeout(function(){ocrLoop(video)},300);return}
+  if(current||!cesta||video.readyState<2||!video.videoWidth){setTimeout(function(){ocrLoop(video)},300);return}
   var vw=video.videoWidth,vh=video.videoHeight,sw=vw*0.84,sh=vh*0.56,sc=Math.min(1,1400/sw);
   ocrCanvas.width=Math.round(sw*sc);ocrCanvas.height=Math.round(sh*sc);
   ocrCtx.drawImage(video,(vw-sw)/2,(vh-sh)/2,sw,sh,0,0,ocrCanvas.width,ocrCanvas.height);
@@ -501,6 +532,7 @@ function photoBarcode(img){
 }
 $('photo').onchange=function(){
   var f=this.files&&this.files[0];this.value='';if(!f)return;
+  if(!cesta){toast('Prima avvia una cesta',2500);return}
   toast('Leggo la foto…',1800);
   var img=new Image(),url=URL.createObjectURL(f);
   img.onload=function(){
@@ -542,6 +574,44 @@ $('cfgTest').onclick=function(){
 
 /* ---------- avvio ---------- */
 updateTotals();
+
+/* ---------- ceste ---------- */
+function pushCesta(action,name){
+  queue.push({id:Date.now().toString(36)+Math.random().toString(36).slice(2,8),type:'cesta',action:action,cesta:name,t:new Date().toISOString()});
+  LS.set('queue',queue);flush();
+}
+function paintCesta(){
+  $('cestaNew').hidden=!!cesta;$('cestaOn').hidden=!cesta;
+  if(!cesta&&camOn)setMsg('Avvia una cesta per iniziare');
+  updateTotals();
+}
+function startCesta(){
+  var raw=$('cestaN').value.toUpperCase().replace(/^CESTA/,'').replace(/[^A-Z0-9]/g,'');
+  if(!raw){toast('Scrivi il numero della cesta',2500);return}
+  cesta={n:'CESTA '+raw,t:Date.now()};LS.set('cesta',cesta);
+  $('cestaN').value='';
+  pushCesta('start',cesta.n);paintCesta();
+  if(camOn)setMsg('Inquadra l\'etichetta');
+}
+$('cestaStart').onclick=startCesta;
+$('cestaN').onkeydown=function(e){if(e.key==='Enter')startCesta()};
+$('cestaEnd').onclick=function(){
+  if(!cesta)return;
+  var t=0,r=0;Object.keys(counts).forEach(function(k){if(k.indexOf(cesta.n+'|')===0&&counts[k]>0){t+=counts[k];r++}});
+  $('endTitle').textContent='Chiudere '+cesta.n+'?';
+  $('endMsg').textContent=t+' pezzi in '+r+' righe. Dopo la chiusura dovrai avviare un\'altra cesta per continuare.';
+  $('endDlg').showModal();
+};
+$('endNo').onclick=function(){$('endDlg').close()};
+$('endYes').onclick=function(){
+  $('endDlg').close();
+  var name=cesta.n;
+  if(current)closeSheet();
+  pushCesta('close',name);
+  cesta=null;LS.set('cesta',null);
+  paintCesta();toast(name+' chiusa',2500);
+};
+paintCesta();
 loadCatalog().then(function(){startCamera();flush();loadCodes()});
 window.__leone={ocr:{init:ocrInit,rec:ocrRecognize,match:ocrMatch,tokens:ocrTokens,inv:invertedCopy,open:function(s,t){openSheet(s,{hint:t})}},zDecode:function(){return zr?zDecode.apply(null,arguments):(initZ(),zDecode.apply(null,arguments))},codes:function(){return codes},resolveSku:resolveSku,catalog:function(){return catalog},onCode:onCode,queue:function(){return queue}};
 })();
