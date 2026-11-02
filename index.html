@@ -119,6 +119,8 @@ var counts=LS.get('counts',{});   // "SKU|variante" -> pezzi contati da questo t
 var current=null;          // codice aperto nel pannello
 var flushing=false, flushTimer=null;
 var lastSeen={code:'',t:0};
+var codes=LS.get('codes',{});   // codice a barre -> {sku,n,v}
+var pendingAssoc=null;
 
 /* ---------- configurazione da link (#u=...) ---------- */
 (function(){
@@ -163,18 +165,35 @@ function resolveSku(raw){
 }
 
 /* ---------- pannello varianti ---------- */
-function openSheet(sku){
+function vfind(m){
+  var ps=catalog[m.sku]||[];
+  for(var i=0;i<ps.length;i++){
+    if(ps[i].n!==m.n)continue;
+    for(var j=0;j<ps[i].v.length;j++){var x=ps[i].v[j];if(x===m.v||vlabel(x)===m.v)return x}
+  }
+  return null;
+}
+function openSheet(sku,opts){
+  opts=opts||{};
   current=sku;
   var prods=catalog[sku];
-  $('shCode').textContent=sku;
-  $('shName').textContent=prods.map(function(p){return p.n}).join(' / ');
+  $('shCode').textContent=sku+(opts.assoc?' · associa il codice '+opts.assoc:'');
+  $('shName').textContent=opts.only?opts.only.n:prods.map(function(p){return p.n}).join(' / ');
   var box=$('variants');box.innerHTML='';
+  var auto=null;
   prods.forEach(function(p){
-    if(prods.length>1){var h=document.createElement('div');h.className='hint';h.textContent=p.n;box.appendChild(h)}
+    if(opts.only&&opts.only.n!==p.n)return;
+    if(prods.length>1&&!opts.only){var hh=document.createElement('div');hh.className='hint';hh.textContent=p.n;box.appendChild(hh)}
     p.v.forEach(function(v){
+      if(opts.only&&opts.only.v!==v)return;
       var key=sku+'|'+p.n+'|'+v;
       var row=document.createElement('div');row.className='var';
       var lab=document.createElement('div');lab.className='lab';lab.textContent=vlabel(v);
+      if(opts.assoc){
+        var ab=document.createElement('button');ab.type='button';ab.className='plus';ab.style.width='auto';ab.style.padding='0 14px';ab.textContent='Associa';
+        ab.onclick=function(){assoc(opts.assoc,sku,p.n,v)};
+        row.style.gridTemplateColumns='1fr auto';row.appendChild(lab);row.appendChild(ab);box.appendChild(row);return;
+      }
       var minus=document.createElement('button');minus.type='button';minus.textContent='−';minus.setAttribute('aria-label','Togli uno '+vlabel(v));
       var n=document.createElement('div');n.className='n';n.textContent=counts[key]||0;
       var plus=document.createElement('button');plus.type='button';plus.className='plus';plus.textContent='+';plus.setAttribute('aria-label','Aggiungi uno '+vlabel(v));
@@ -182,13 +201,30 @@ function openSheet(sku){
       plus.onclick=function(){change(sku,p.n,v,1,n,key)};
       row.appendChild(lab);row.appendChild(minus);row.appendChild(n);row.appendChild(plus);
       box.appendChild(row);
+      if(opts.only)auto=plus;
     });
   });
   $('sheet').hidden=false;
   $('results').innerHTML='';
+  if(auto)auto.click();
   if(navigator.vibrate)try{navigator.vibrate(40)}catch(e){}
 }
-function closeSheet(){current=null;$('sheet').hidden=true;lastSeen={code:'',t:Date.now()}}
+function assoc(code,sku,name,v){
+  codes[code]={sku:sku,n:name,v:v};LS.set('codes',codes);
+  queue.push({id:Date.now().toString(36)+Math.random().toString(36).slice(2,8),type:'map',ean:code,sku:sku,name:name,variant:vlabel(v),t:new Date().toISOString()});
+  LS.set('queue',queue);pendingAssoc=null;flush();
+  toast('Codice associato');
+  openSheet(sku,{only:{n:name,v:v}});
+}
+function openUnknown(raw){
+  current='?';pendingAssoc=raw;
+  $('shCode').textContent='Codice '+raw+' non associato';
+  $('shName').textContent='Cerca qui sopra l\'articolo (codice o nome, es. ABX431) e scegli la variante';
+  $('variants').innerHTML='';
+  $('sheet').hidden=false;
+  if(navigator.vibrate)try{navigator.vibrate([60,40,60])}catch(e){}
+}
+function closeSheet(){current=null;pendingAssoc=null;$('sheet').hidden=true;$('q').value='';$('results').innerHTML='';lastSeen={code:'',t:Date.now()};if(camOn)setMsg('Inquadra il codice a barre')}
 $('closeSheet').onclick=closeSheet;
 
 function change(sku,name,variant,delta,nEl,key){
@@ -235,6 +271,14 @@ function flush(){
 }
 window.addEventListener('online',flush);
 
+/* ---------- codici a barre associati (condivisi nel foglio) ---------- */
+function loadCodes(){
+  if(!endpoint)return Promise.resolve();
+  return fetch(endpoint+(endpoint.indexOf('?')<0?'?':'&')+'action=codes',{redirect:'follow'}).then(function(r){return r.json()}).then(function(j){
+    if(j&&j.ok&&j.codes){Object.keys(j.codes).forEach(function(k){codes[k]=j.codes[k]});LS.set('codes',codes)}
+  }).catch(function(){});
+}
+
 /* ---------- ricerca manuale ---------- */
 $('q').addEventListener('input',function(){
   var q=this.value.trim().toLowerCase();var box=$('results');box.innerHTML='';
@@ -246,24 +290,29 @@ $('q').addEventListener('input',function(){
     var a=document.createElement('span');a.textContent=h.n;
     var s=document.createElement('span');s.className='sku';s.textContent=h.sku;
     b.appendChild(a);b.appendChild(s);
-    b.onclick=function(){$('q').value='';openSheet(h.sku)};
+    b.onclick=function(){$('q').value='';openSheet(h.sku,pendingAssoc?{assoc:pendingAssoc}:undefined)};
     box.appendChild(b);
   });
   if(!hits.length){var d=document.createElement('div');d.className='hint';d.textContent='Nessun articolo trovato';box.appendChild(d)}
 });
 $('q').addEventListener('keydown',function(e){
-  if(e.key==='Enter'){var s=resolveSku(this.value);if(s){this.value='';openSheet(s)}}
+  if(e.key==='Enter'){var s=resolveSku(this.value);if(s){this.value='';openSheet(s,pendingAssoc?{assoc:pendingAssoc}:undefined)}}
 });
 
 /* ---------- fotocamera ---------- */
 var stream=null,controls=null,detector=null,timer=null,camOn=false;
 function onCode(raw){
+  raw=String(raw||'').trim();if(!raw)return;
   if(current)return;
+  setMsg('Letto: '+raw);
   var now=Date.now();
   if(raw===lastSeen.code&&now-lastSeen.t<2500)return;
   lastSeen={code:raw,t:now};
+  var m=codes[raw];
+  if(m&&catalog[m.sku]){var vv=vfind(m);openSheet(m.sku,vv===null?undefined:{only:{n:m.n,v:vv}});return}
   var sku=resolveSku(raw);
-  if(sku){openSheet(sku)}else{toast('Codice non in catalogo: '+raw,2200)}
+  if(sku){openSheet(sku);return}
+  openUnknown(raw);
 }
 function setMsg(t){$('camMsg').textContent=t}
 function stopCamera(){
@@ -326,8 +375,8 @@ $('cfgTest').onclick=function(){
 
 /* ---------- avvio ---------- */
 updateTotals();
-loadCatalog().then(function(){startCamera();flush()});
-window.__leone={resolveSku:resolveSku,catalog:function(){return catalog},onCode:onCode,queue:function(){return queue}};
+loadCatalog().then(function(){startCamera();flush();loadCodes()});
+window.__leone={codes:function(){return codes},resolveSku:resolveSku,catalog:function(){return catalog},onCode:onCode,queue:function(){return queue}};
 })();
 </script>
 </body>
