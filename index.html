@@ -72,6 +72,8 @@ footer button{padding:6px 10px;font-size:13px}
 <div class="row">
   <input id="q" type="search" placeholder="Cerca codice o nome (es. GN010)" autocomplete="off" enterkeyhint="search">
   <button id="camBtn" type="button">Fotocamera</button>
+  <button id="photoBtn" type="button">Foto</button>
+  <input id="photo" type="file" accept="image/*" capture="environment" hidden>
 </div>
 <div class="results" id="results"></div>
 
@@ -296,7 +298,7 @@ $('q').addEventListener('input',function(){
   if(!hits.length){var d=document.createElement('div');d.className='hint';d.textContent='Nessun articolo trovato';box.appendChild(d)}
 });
 $('q').addEventListener('keydown',function(e){
-  if(e.key==='Enter'){var s=resolveSku(this.value);if(s){this.value='';openSheet(s,pendingAssoc?{assoc:pendingAssoc}:undefined)}}
+  if(e.key==='Enter'){if(/^\d{8,14}$/.test(this.value.trim())){var dg=this.value.trim();this.value='';onCode(dg);return}var s=resolveSku(this.value);if(s){this.value='';openSheet(s,pendingAssoc?{assoc:pendingAssoc}:undefined)}}
 });
 
 /* ---------- fotocamera ---------- */
@@ -322,31 +324,58 @@ function stopCamera(){
   if(stream){stream.getTracks().forEach(function(t){t.stop()});stream=null}
   $('video').srcObject=null;
 }
+var zr=null,zc=null,zx=null;
+var Zangles=[0,-2,2,-4,4];
+var Zvars=[[0.6,0.4,3,0],[0.84,0.56,1.8,0],[0.6,0.4,3,1],[0.84,0.56,1.8,1]];
+function initZ(){
+  var Z=window.ZXing,hs=new Map();
+  hs.set(Z.DecodeHintType.POSSIBLE_FORMATS,[Z.BarcodeFormat.EAN_13,Z.BarcodeFormat.CODE_128,Z.BarcodeFormat.EAN_8,Z.BarcodeFormat.CODE_39,Z.BarcodeFormat.UPC_A]);
+  hs.set(Z.DecodeHintType.TRY_HARDER,true);
+  zr=new Z.MultiFormatReader();zr.setHints(hs);
+  zc=document.createElement('canvas');zx=zc.getContext('2d',{willReadFrequently:true});
+}
+function zDecode(src,sx,sy,sw,sh,scale,ang,glob){
+  var Z=window.ZXing;
+  var cw=Math.round(sw*scale),ch=Math.round(sh*scale);
+  zc.width=cw;zc.height=ch;
+  zx.fillStyle='#fff';zx.fillRect(0,0,cw,ch);
+  zx.save();zx.translate(cw/2,ch/2);zx.rotate(ang*Math.PI/180);
+  zx.drawImage(src,sx,sy,sw,sh,-cw/2,-ch/2,cw,ch);zx.restore();
+  try{
+    var ls=new Z.HTMLCanvasElementLuminanceSource(zc);
+    var b=glob?new Z.GlobalHistogramBinarizer(ls):new Z.HybridBinarizer(ls);
+    return zr.decode(new Z.BinaryBitmap(b)).getText();
+  }catch(e){return null}
+}
+function zScan(video,vw,vh,tick){
+  var n=Zangles.length*Zvars.length,i=tick%n;
+  var v=Zvars[Math.floor(i/Zangles.length)],ang=Zangles[i%Zangles.length];
+  var sw=vw*v[0],sh=vh*v[1];
+  return zDecode(video,(vw-sw)/2,(vh-sh)/2,sw,sh,Math.min(v[2],2000/sw),ang,v[3]);
+}
 function startCamera(){
   stopCamera();
-  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){setMsg('Fotocamera non disponibile: usa la ricerca');return}
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){setMsg('Fotocamera non disponibile: usa Foto o la ricerca');return}
   camOn=true;setMsg('Avvio fotocamera…');
   var video=$('video');
-  if('BarcodeDetector' in window){
-    navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280}},audio:false}).then(function(s){
-      stream=s;video.srcObject=s;return video.play();
-    }).then(function(){
-      try{detector=new BarcodeDetector({formats:['code_128','ean_13','ean_8','code_39','upc_a','qr_code']})}catch(e){detector=new BarcodeDetector()}
-      setMsg('Inquadra il codice a barre');
-      timer=setInterval(function(){
-        if(current||video.readyState<2)return;
-        detector.detect(video).then(function(r){if(r&&r.length)onCode(r[0].rawValue)}).catch(function(){});
-      },250);
-    }).catch(camError);
-  }else if(window.ZXing){
-    var Z=ZXing,hints=new Map();
-    hints.set(Z.DecodeHintType.POSSIBLE_FORMATS,[Z.BarcodeFormat.CODE_128,Z.BarcodeFormat.EAN_13,Z.BarcodeFormat.EAN_8,Z.BarcodeFormat.CODE_39,Z.BarcodeFormat.UPC_A,Z.BarcodeFormat.QR_CODE]);
-    hints.set(Z.DecodeHintType.TRY_HARDER,true);
-    var reader=new Z.BrowserMultiFormatReader(hints);
-    reader.decodeFromConstraints({video:{facingMode:{ideal:'environment'},width:{ideal:1280}},audio:false},video,function(res){
-      if(res)onCode(res.getText());
-    }).then(function(c){controls=c;setMsg('Inquadra il codice a barre')}).catch(camError);
-  }else{setMsg('Lettore non caricato: usa la ricerca manuale')}
+  navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}},audio:false}).then(function(s){
+    stream=s;video.srcObject=s;
+    try{s.getVideoTracks()[0].applyConstraints({advanced:[{focusMode:'continuous'}]}).catch(function(){})}catch(e){}
+    return video.play();
+  }).then(function(){
+    var native='BarcodeDetector' in window;
+    if(native){try{detector=new BarcodeDetector({formats:['code_128','ean_13','ean_8','code_39','upc_a','qr_code']})}catch(e){detector=new BarcodeDetector()}}
+    else if(window.ZXing){initZ()}
+    else{setMsg('Lettore non caricato: usa Foto o la ricerca');return}
+    var tick=0;
+    timer=setInterval(function(){
+      if(current||video.readyState<2||!video.videoWidth)return;
+      tick++;
+      if(tick%8===1)setMsg('Inquadra il codice a barre · '+video.videoWidth+'×'+video.videoHeight);
+      if(native){detector.detect(video).then(function(r){if(r&&r.length)onCode(r[0].rawValue)}).catch(function(){})}
+      else{var t=zScan(video,video.videoWidth,video.videoHeight,tick);if(t)onCode(t)}
+    },native?250:170);
+  }).catch(camError);
 }
 function camError(e){
   camOn=false;
@@ -356,6 +385,32 @@ function camError(e){
 $('camBtn').onclick=function(){if(camOn){stopCamera();setMsg('Fotocamera spenta');this.textContent='Fotocamera'}else{startCamera();this.textContent='Spegni'}};
 $('camBtn').textContent='Spegni';
 document.addEventListener('visibilitychange',function(){if(document.hidden){if(camOn){stopCamera();$('camBtn').textContent='Fotocamera';setMsg('Fotocamera in pausa')}}});
+
+/* ---------- foto del codice (alternativa alla lettura live) ---------- */
+$('photoBtn').onclick=function(){$('photo').click()};
+$('photo').onchange=function(){
+  var f=this.files&&this.files[0];this.value='';if(!f)return;
+  if(!window.ZXing){toast('Lettore non caricato');return}
+  if(!zr)initZ();
+  toast('Leggo la foto…',1500);
+  var img=new Image(),url=URL.createObjectURL(f);
+  img.onload=function(){
+    var w=img.naturalWidth,hh=img.naturalHeight,found=null,crops=[[1,1],[0.7,0.7],[0.5,0.5]];
+    outer:for(var c=0;c<crops.length;c++){
+      var sw=w*crops[c][0],sh=hh*crops[c][1],scale=Math.min(1,2200/sw);
+      for(var a=0;a<Zangles.length;a++){
+        for(var g=0;g<2;g++){
+          found=zDecode(img,(w-sw)/2,(hh-sh)/2,sw,sh,scale,Zangles[a],g);
+          if(found)break outer;
+        }
+      }
+    }
+    URL.revokeObjectURL(url);
+    if(found){lastSeen={code:'',t:0};onCode(found)}else toast('Nessun codice letto: avvicinati e rifai la foto',3200);
+  };
+  img.onerror=function(){toast('Foto non leggibile')};
+  img.src=url;
+};
 
 /* ---------- impostazioni ---------- */
 var dlg=$('cfg');
@@ -376,7 +431,7 @@ $('cfgTest').onclick=function(){
 /* ---------- avvio ---------- */
 updateTotals();
 loadCatalog().then(function(){startCamera();flush();loadCodes()});
-window.__leone={codes:function(){return codes},resolveSku:resolveSku,catalog:function(){return catalog},onCode:onCode,queue:function(){return queue}};
+window.__leone={zDecode:function(){return zr?zDecode.apply(null,arguments):(initZ(),zDecode.apply(null,arguments))},codes:function(){return codes},resolveSku:resolveSku,catalog:function(){return catalog},onCode:onCode,queue:function(){return queue}};
 })();
 </script>
 </body>
